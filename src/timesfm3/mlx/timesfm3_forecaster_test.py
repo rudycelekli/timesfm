@@ -20,7 +20,9 @@ additionally skipped unless PyTorch is available to serve as the oracle. MLX run
 so the whole module is skipped when MLX is not installed.
 """
 
+import json
 import os
+import tempfile
 import unittest
 
 import numpy as np
@@ -127,6 +129,43 @@ class TimesFM3MlxModelTest(unittest.TestCase):
     pf = mx.array(rng.randn(1, 1, 128 + 30).astype(np.float32))
     logits = model.decode(target, past_future_covariates=pf)
     self.assertEqual(logits.shape[2], 30)
+
+  def test_point_forecast_uses_checkpoint_median_quantile(self):
+    # A checkpoint whose quantile list differs from the default 9 must still
+    # return its 0.5 quantile as the point forecast, not index 4 (0.9 here).
+    from mlx.utils import tree_flatten
+    from safetensors.numpy import save_file
+
+    quantiles = [0.1, 0.25, 0.5, 0.75, 0.9]
+    hf_cfg = {
+      "quantiles": quantiles,
+      "transformer_config": {
+        "num_layers": 2,
+        "transformer": {"model_dims": 64, "hidden_dims": 64, "num_heads": 4},
+      },
+    }
+    model = mlx_model_lib.TimesFM3Mlx(
+      configs.TimesFM3MlxConfig.from_hf_config(hf_cfg), compile=False
+    )
+    ctx = (np.sin(np.arange(64) / 3) * 5 + 10).astype(np.float32)
+    with tempfile.TemporaryDirectory() as tmpdir:
+      with open(os.path.join(tmpdir, "config.json"), "w") as f:
+        json.dump(hf_cfg, f)
+      save_file(
+        {k: np.array(v) for k, v in tree_flatten(model.parameters())},
+        os.path.join(tmpdir, "model.safetensors"),
+      )
+      forecaster = timesfm3_forecaster.TimesFM3Forecaster.from_pretrained(
+        tmpdir, compile=False
+      )
+      explicit = timesfm3_forecaster.TimesFM3Forecaster.from_pretrained(
+        tmpdir, compile=False, median_quantile_index=3
+      )
+    self.assertEqual(forecaster.config.median_quantile_index, 2)
+    out = forecaster.predict(ctx, horizon=16, return_quantiles=True)
+    np.testing.assert_array_equal(out.forecast, out.quantiles[:, 2])
+    # An explicit index is still honoured.
+    self.assertEqual(explicit.config.median_quantile_index, 3)
 
   def test_from_hf_config_parses_frozen_running_stats(self):
     cfg = configs.TimesFM3MlxConfig.from_hf_config({"use_frozen_running_stats": True})

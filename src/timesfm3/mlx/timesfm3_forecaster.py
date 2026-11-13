@@ -46,6 +46,11 @@ def _znorm_stats(arr: np.ndarray) -> tuple[float, float]:
   return mu, sigma
 
 
+def _median_quantile_index(quantiles) -> int:
+  """Returns the index of the quantile closest to 0.5."""
+  return min(range(len(quantiles)), key=lambda i: abs(quantiles[i] - 0.5))
+
+
 def _znorm_rows(arr: np.ndarray) -> tuple[np.ndarray, list[tuple[float, float]]]:
   """Z-normalize each row by its own stats; return the normalized array and stats."""
   stats = [_znorm_stats(row) for row in arr]
@@ -61,8 +66,9 @@ class _ModelConfig:
   checkpoint_path: str = "google/timesfm-3.0-pytorch"
   # Batch size to use for inference.
   per_core_batch_size: int = 4
-  # Median quantile index for the point forecast.
-  median_quantile_index: int = 4
+  # Index of the quantile returned as the point forecast. None picks the
+  # quantile closest to 0.5 in the checkpoint's quantile list.
+  median_quantile_index: int | None = None
   # mx.compile the forward pass (fuses kernels, cuts dispatch overhead).
   compile: bool = True
   # Longest context fed to the model. Contexts beyond this are truncated to
@@ -120,8 +126,8 @@ class TimesFM3Forecaster:
       force_download=self.config.force_download,
     )
     median_q_idx = self.config.median_quantile_index
-    if median_q_idx >= self.model.config.num_quantiles:
-      median_q_idx = self.model.config.num_quantiles // 2
+    if median_q_idx is None or median_q_idx >= self.model.config.num_quantiles:
+      median_q_idx = _median_quantile_index(self.model.config.quantiles)
     self.config = dataclasses.replace(self.config, median_quantile_index=median_q_idx)
 
   @property
@@ -198,6 +204,8 @@ class TimesFM3Forecaster:
       past_future_covariates if past_future_covariates is not None else [None] * n
     )
     median_idx = self.config.median_quantile_index
+    if median_idx is None:
+      median_idx = _median_quantile_index(self.model.config.quantiles)
     cap = self.config.max_context_length
     # Decode at the horizon rounded up to whole output patches and trim back, as
     # the torch backend does; the stitched decode depends on the decoded length.
