@@ -455,7 +455,14 @@ class TimesFM_2p5_200M_torch(
         scaled_inputs = inputs / magnitude
         mu = torch.mean(scaled_inputs, dim=-1, keepdim=True) * magnitude
         sigma = torch.std(scaled_inputs, dim=-1, keepdim=True) * magnitude
-        inputs = revin(inputs, mu, sigma, reverse=False)
+        # revin treats sigma < 1e-6 as a constant series. For a series whose
+        # values are all below 1 in magnitude, apply that tolerance relative
+        # to its scale instead, so that 1e-7 * x is normalized like x.
+        tolerance = util._TOLERANCE * (
+          inputs.abs().amax(dim=-1, keepdim=True).clamp_max(1.0)
+        )
+        sigma = torch.where(sigma <= tolerance, 1.0, sigma)
+        inputs = (inputs - mu) / sigma
       else:
         mu, sigma = None, None
 
@@ -517,7 +524,7 @@ class TimesFM_2p5_200M_torch(
           )
 
       if fc.normalize_inputs:
-        full_forecast = revin(full_forecast, mu, sigma, reverse=True)
+        full_forecast = full_forecast * sigma[..., None] + mu[..., None]
 
       if is_positive is not None:
         full_forecast = torch.where(

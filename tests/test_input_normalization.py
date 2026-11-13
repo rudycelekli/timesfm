@@ -39,3 +39,32 @@ def test_large_input_normalization(monkeypatch, magnitude, device):
   reference = inputs.astype(np.float64)
   expected = reference.mean() + reference.std(ddof=1)
   np.testing.assert_allclose(forecast, expected, rtol=1e-5)
+
+
+@pytest.mark.parametrize("magnitude", [1e-7, 1e-12])
+def test_small_input_normalization(monkeypatch, magnitude):
+  # A non-constant series with sigma below revin's 1e-6 tolerance must still
+  # be scaled to unit variance, or the model sees an almost-zero series and
+  # returns forecasts on the wrong scale.
+  def decode(horizon, inputs, masks):
+    torch.testing.assert_close(inputs.std(dim=-1), torch.ones(1))
+    return torch.ones(1, 1, 128, 10), None, None
+
+  monkeypatch.setattr(
+      timesfm_2p5_torch, "TimesFM_2p5_200M_torch_module",
+      lambda: SimpleNamespace(
+          p=32, o=128, os=1024, q=10, device="cpu", device_count=1,
+          config=SimpleNamespace(context_limit=16384), decode=decode,
+      ),
+  )
+  model = timesfm_2p5_torch.TimesFM_2p5_200M_torch(torch_compile=False)
+  model.compile(ForecastConfig(
+      max_context=32, max_horizon=128, normalize_inputs=True,
+      use_continuous_quantile_head=False, force_flip_invariance=False,
+      infer_is_positive=False, fix_quantile_crossing=False,
+  ))
+  inputs = np.tile(np.array([1, 2, 3, 4], dtype=np.float32), 8)[None] * magnitude
+  _, forecast = model.compiled_decode(1, inputs, np.zeros_like(inputs, dtype=bool))
+  reference = inputs.astype(np.float64)
+  expected = reference.mean() + reference.std(ddof=1)
+  np.testing.assert_allclose(forecast, expected, rtol=1e-5)
