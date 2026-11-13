@@ -266,15 +266,20 @@ class TimesFM3Forecaster:
       and padding_mode == "none"
     ):
       # Fast path: plain univariate, no covariates / symmetric averaging / znorm /
-      # padding. Group by length so each group runs through a single batched
-      # forward pass. decode() is per-series independent (running stats, RevIN,
+      # padding. Group by length and run each group through batched forward
+      # passes of at most per_core_batch_size series, as the torch backend
+      # does. decode() is per-series independent (running stats, RevIN,
       # detrending are per row), so this is numerically identical to looping but
       # scales throughput.
       arrs = [np.asarray(c, dtype=np.float32).reshape(-1)[-cap:] for c in contexts]
+      bs = max(1, self.config.per_core_batch_size)
       groups: dict[int, list[int]] = {}
       for i, a in enumerate(arrs):
         groups.setdefault(a.shape[0], []).append(i)
-      for _length, idxs in groups.items():
+      chunks = [
+        idxs[j : j + bs] for idxs in groups.values() for j in range(0, len(idxs), bs)
+      ]
+      for idxs in chunks:
         batch = mx.array(np.stack([arrs[i] for i in idxs]))[:, None, :]
         logits = np.array(self.model.decode(batch, global_horizon))
         logits = logits[:, :, :horizon, :]  # (B, 1, h, q)

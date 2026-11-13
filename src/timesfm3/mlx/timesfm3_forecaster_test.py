@@ -22,6 +22,7 @@ so the whole module is skipped when MLX is not installed.
 
 import os
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -97,6 +98,31 @@ class TimesFM3MlxModelTest(unittest.TestCase):
     for i in range(3):
       single = np.array(model.decode(mx.array(ctxs[i])[None, None, :], horizon=24))
       np.testing.assert_allclose(batched[i], single[0], atol=1e-4)
+
+  def test_predict_batch_honours_per_core_batch_size(self):
+    # The batched univariate path used to send every same-length series
+    # through one forward pass, however many there were.
+    f = timesfm3_forecaster.TimesFM3Forecaster.__new__(
+      timesfm3_forecaster.TimesFM3Forecaster
+    )
+    f.config = timesfm3_forecaster._ModelConfig(per_core_batch_size=4, compile=False)
+    f.model = self._tiny_model()
+    rng = np.random.RandomState(0)
+    contexts = [rng.randn(128).astype(np.float32) for _ in range(10)]
+    batch_sizes = []
+    decode = f.model.decode
+
+    def recording_decode(target, *args, **kwargs):
+      batch_sizes.append(target.shape[0])
+      return decode(target, *args, **kwargs)
+
+    with mock.patch.object(f.model, "decode", side_effect=recording_decode):
+      outs = list(f.predict_batch(contexts, horizon=16))
+    self.assertEqual(batch_sizes, [4, 4, 2])
+    for c, out in zip(contexts, outs):
+      np.testing.assert_allclose(
+        out.forecast, f.predict(c, horizon=16).forecast, atol=1e-4
+      )
 
   def test_decode_multivariate_targets_shape(self):
     # Two target variates in, two forecasts out.
