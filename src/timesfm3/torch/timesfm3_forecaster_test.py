@@ -287,6 +287,31 @@ class TimesFM3ForecasterUseSdpaTest(unittest.TestCase):
     np.testing.assert_allclose(outputs[True], outputs[False], rtol=1e-4, atol=1e-4)
 
 
+  def test_use_variate_attention_false_from_pretrained(self):
+    # Issue #502: the kwarg was overwritten by config.json and ignored.
+    context = np.stack([self.context, self.context[::-1] * 0.5 - 3.0])
+    with tempfile.TemporaryDirectory() as tmpdir:
+      self.model.save_pretrained(tmpdir)
+      default = timesfm3_forecaster.TimesFM3Forecaster.from_pretrained(
+        tmpdir, device="cpu"
+      )
+      disabled = timesfm3_forecaster.TimesFM3Forecaster.from_pretrained(
+        tmpdir, device="cpu", use_variate_attention=False
+      )
+    self.assertTrue(default.config.use_variate_attention)
+    self.assertFalse(disabled.config.use_variate_attention)
+    for layer in disabled.model.transformer_stack.layers:
+      self.assertFalse(layer.use_variate_attention)
+    out_default = default.predict(context, horizon=16).forecast
+    out_disabled = disabled.predict(context, horizon=16).forecast
+    self.assertGreater(np.abs(out_default - out_disabled).max(), 1e-3)
+    # Same result as switching the layers off by hand on the default model.
+    for layer in default.model.transformer_stack.layers:
+      layer.use_variate_attention = False
+    np.testing.assert_allclose(
+      out_disabled, default.predict(context, horizon=16).forecast, rtol=1e-5
+    )
+
 class _RecordingFakeModel(FakeModel):
   """FakeModel that records decode inputs and infers horizon like the real model."""
 

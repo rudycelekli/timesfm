@@ -404,6 +404,12 @@ class TimesFM3Forecaster:
       median_q_idx = self.config.median_quantile_index
       if median_q_idx >= len(self.model.quantiles):
         median_q_idx = len(self.model.quantiles) // 2
+      # Skipping variate attention needs no weights, so a requested
+      # use_variate_attention=False wins over config.json. Turning it on for a
+      # checkpoint saved without it is not possible.
+      use_variate_attention = (
+        self.model.use_variate_attention and self.config.use_variate_attention
+      )
 
       self.config = dataclasses.replace(
         self.config,
@@ -413,7 +419,7 @@ class TimesFM3Forecaster:
         median_quantile_index=median_q_idx,
         residual_block_config=self.model.residual_block_config,
         transformer_config=self.model.transformer_config,
-        use_variate_attention=self.model.use_variate_attention,
+        use_variate_attention=use_variate_attention,
         value_clip=self.model.value_clip,
         use_stitching=self.model.use_stitching,
         use_linear_detrending=self.model.use_linear_detrending,
@@ -426,6 +432,10 @@ class TimesFM3Forecaster:
       for module in self.model.modules():
         if isinstance(module, transformer_lib.MultiHeadAttention):
           module.use_sdpa = self.config.use_sdpa
+      self.model.use_variate_attention = use_variate_attention
+      for module in self.model.modules():
+        if isinstance(module, transformer_lib.MixingTransformer):
+          module.use_variate_attention = use_variate_attention
     else:
       # Local file (.safetensors or .pth / .pt)
       self.model = _make_torch_model(self.config)
