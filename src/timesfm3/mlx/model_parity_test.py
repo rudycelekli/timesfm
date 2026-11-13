@@ -430,6 +430,21 @@ class TimesFM3ForecasterParityTest(unittest.TestCase):
       np.testing.assert_allclose(torch_out.forecast, mlx_out.forecast, atol=1e-3)
       np.testing.assert_allclose(torch_out.quantiles, mlx_out.quantiles, atol=1e-3)
 
+  def test_predict_make_positive_ignores_nans(self):
+    # torch decides whether to clamp from the non-NaN values only, so a
+    # nonnegative series with a missing value is still clamped.
+    t, m = self._build_forecasters()
+    ctx = np.abs(np.random.RandomState(0).randn(300)).astype(np.float32)
+    ctx[50] = np.nan
+    # A 1D target takes the MLX batched fast path; a 2D one the general path.
+    for c in (ctx, np.stack([ctx, ctx])):
+      kw = dict(horizon=64, return_quantiles=True, make_positive=True)
+      torch_out = t.predict(c, **kw)
+      mlx_out = m.predict(c, **kw)
+      self.assertGreaterEqual(torch_out.quantiles.min(), 0.0)
+      self.assertGreaterEqual(mlx_out.forecast.min(), 0.0)
+      self.assertGreaterEqual(mlx_out.quantiles.min(), 0.0)
+
 
 if __name__ == "__main__":
   unittest.main()

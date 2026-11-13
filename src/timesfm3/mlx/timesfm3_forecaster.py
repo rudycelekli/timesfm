@@ -46,6 +46,15 @@ def _znorm_stats(arr: np.ndarray) -> tuple[float, float]:
   return mu, sigma
 
 
+def _is_nonnegative(arr: np.ndarray) -> np.ndarray:
+  """Per row of a 2D array: True if it has a non-NaN value and all are >= 0.
+
+  NaNs are ignored, matching the torch backend's ``_is_nonnegative``.
+  """
+  valid = ~np.isnan(arr)
+  return valid.any(axis=1) & np.where(valid, arr >= 0, True).all(axis=1)
+
+
 def _znorm_rows(arr: np.ndarray) -> tuple[np.ndarray, list[tuple[float, float]]]:
   """Z-normalize each row by its own stats; return the normalized array and stats."""
   stats = [_znorm_stats(row) for row in arr]
@@ -241,7 +250,7 @@ class TimesFM3Forecaster:
       quantiles = np.array(tgt) if return_quantiles else None
       if make_positive:
         # Match torch: clamp a variate only when its own input is nonnegative.
-        nonneg = (ctx_2d >= 0).all(axis=1)
+        nonneg = _is_nonnegative(ctx_2d)
         for r in range(num_target):
           if nonneg[r]:
             forecast[r] = np.maximum(forecast[r], 0.0)
